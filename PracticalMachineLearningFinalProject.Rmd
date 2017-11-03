@@ -1,0 +1,111 @@
+---
+title: "Practical Machine Learning Final Project - DLK"
+output:
+  html_document:
+    df_print: paged
+---
+# Executive Summary
+
+The goal of this project is to create a machine learning model to analyze predict the manner in which a specific exercise was performed: either correctly, or with one of four "bad" forms.  The raw data was preprocessed to remove pre-computed summary parameters which did not improve the analysis.  A random forest prediction model was created and a 5-fold cross-validation was used to improve the accuracy.  The resulting model exhibited a 0.4% out-of-sample error rate.
+
+# Data Acquisition 
+First I load the libraries.
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+## Set up environment
+library(caret)
+library(quantmod)
+```
+
+I download the training and test data and load the training data into a variable.
+
+```{r message=FALSE, warning=FALSE}
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "pml-training.csv")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "pml-testing.csv")
+
+pmltraining <- read.csv("pml-training.csv")
+```
+
+# Exploratory Data Analysis
+
+In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The data collected contains time series data from the sensors on the arm, belt, and dumbbell.  The researchers added columns of summary statistics at regular time intervals in order to perform a sliding window analysis of the data.    
+
+An example of the first 36 column headers is shown below.  This shows the time series fields.  It also shows the belt measurements (roll_belt, pitch_belt, yaw_belt, and total_accel_belt).  The remaining 25 columns are the time window statistics for those four measurements.  This pattern of measurements followed by statistics is repeated throughout the dataset.  
+```{r message=FALSE, warning=FALSE}
+head(names(pmltraining), 36)
+```
+
+These statistics columns contain missing or NA values for all samples except at the end of each time window.  It would be possible to construct a new dataset that only contains these summary samples.  This would reduce the size of the dataset from over 19,000 samples to just over 400, greatly reducing computation time for building the model.   
+
+```{r message=FALSE, warning=FALSE}
+dim(pmltraining); dim(pmltraining[pmltraining$new_window=="yes",])
+```
+
+However, given the nature of the problem, the difference between the subject performing the exercise correctly and performing it incorrectly could result in only subtle changes in the measurements obtained by the sensors.  These differences might be masked if we build the model on the summary statistics.  Therefore, I decided to remove the columns for the summary statistics and only use the raw measurements.
+
+Next, even though this was time series data, it's likely that a given activity technique is "bad" because it subjects the body to instantaneous forces that are detrimental.  Thus, it should be possible to detect the "bad" techniques using the sensor data independent from the time component.  Thus, I decided to also remove the timestamps from the samples.  
+
+The final factor in the data was the differences between test subjects.  I looked at a randomly selected column, graphed it against the index of the dataset and colored it by subject user_name.  
+
+
+```{r message=FALSE, warning=FALSE}
+plot(pmltraining$accel_arm_y,  col = pmltraining$user_name)
+
+```
+
+As can be seen, there is significant difference between the measurements between individuals, even for the same activity.  This is a significant source of variance for the samples for a given parameter.  If we were using a linear model, I would want to include this parameter in the model to capture the variance.  However, since I am using a random forest model, the lack of correlation between the subjects and the outcome will generally be ignored by the model building algorithm.  
+
+# Pre-processing
+
+I pre-process the data based on the analysis above.  I remove the columns that I do not want to include in the model. 
+
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+reduceddata <- pmltraining %>% 
+    select(-matches("^max|^min|^avg|^var|^skewness|^kurtosis|^total|^amplitude|^stddev")) %>%
+  select(-(X:num_window))
+#names(reduceddata)
+```
+
+# Model Creation
+
+Even though I use K-fold cross-validation when building the model, I'm going to hold back a testing set from the data to use as a final validation.  
+```{r message=FALSE, warning=FALSE}
+set.seed(27384)
+inTrain <- createDataPartition(y = reduceddata$classe, p = 0.75, list = FALSE)
+training <- reduceddata[inTrain,]
+testing <- reduceddata[-inTrain,]
+dim(training); dim(testing)
+```
+
+I build a random forest model.  I use a 5-fold cross validation when building the model to improve accuracy.  
+
+```{r message=FALSE, warning=FALSE}
+set.seed(27384)
+myTrainControl = trainControl( method = "cv", number = 5)
+modFit <- train(classe ~ ., data = training, method = "rf", trControl = myTrainControl)
+modFit
+```
+
+Next, I use the validation set that I kept aside to evaluate the accuracy of the model. 
+
+```{r message=FALSE, warning=FALSE}
+pred <- predict(modFit, testing)
+
+cm <- confusionMatrix(pred, testing$classe)
+cm
+```
+
+From this, I estimate the out-of-sample error rate to be 0.4%.
+
+```{r message=FALSE, warning=FALSE}
+(1 - cm$overall[[1]]) * 100
+```
+
+This compares favorably to the OOB estimate of error from the model creation. 
+```{r message=FALSE, warning=FALSE}
+modFit$finalModel
+
+```
+
